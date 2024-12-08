@@ -1,20 +1,24 @@
 <script setup>
-import originalTodos from './data/todos'
-import { ref, computed, watch } from 'vue'
+import { computed, onMounted, ref, TransitionGroup, watch } from 'vue'
+import StatusFilter from './components/StatusFilter.vue'
+import TodoItem from './components/TodoItem.vue'
+import * as todoApi from './api/todos'
+import Message from './components/Message.vue'
 
 const title = ref('')
-const errorMessage = ref('')
+const status = ref('all')
 const todos = ref([])
+const errorMessage = ref(null)
 
-onBeforeMount(() => {
+onMounted(async () => {
     try {
-        todos.value = JSON.parse(localStorage.getItem('todos'))
-    } catch (error) {}
-
-    if (!Array.isArray(todos.value)) {
-        todos.value = []
+        todos.value = await todoApi.getTodos()
+    } catch (error) {
+        errorMessage.value.show('Unable to load todos')
     }
 })
+
+const activeTodos = computed(() => todos.value.filter((todo) => !todo.completed))
 
 const visibleTodos = computed(() => {
     if (status.value === 'active') {
@@ -28,124 +32,104 @@ const visibleTodos = computed(() => {
     return todos.value
 })
 
-function addTodo() {
+const addTodo = async () => {
     if (!title.value) {
-        errorMessage.value = 'Title should not be empty'
-
+        errorMessage.value.show('Title should not be empty')
         return
     }
 
-    todos.value.push({
-        id: Date.now(),
-        title: title.value,
-        completed: false,
-    })
+    try {
+        const newTodo = await todoApi.createTodo(title.value)
 
-    title.value = ''
+        todos.value.push(newTodo)
+        title.value = ''
+    } catch (error) {
+        errorMessage.value.show('Unable to add a todo')
+    }
 }
 
-const activeTodos = computed(() => todos.value.filter((todo) => !todo.completed))
+const updateTodo = async ({ id, title, completed }) => {
+    try {
+        const updatedTodo = await todoApi.updateTodo({ id, title, completed })
+        const currentTodo = todos.value.find((todo) => todo.id === id)
 
-watch(
-    todos,
-    (newTodos) => {
-        localStorage.setItem('todos', JSON.stringify(newTodos))
-    },
-    { deep: true },
-)
+        Object.assign(currentTodo, updatedTodo)
+    } catch (error) {
+        errorMessage.value.show('Unable to update a todo')
+    }
+}
+
+const deleteTodo = async (todoId) => {
+    try {
+        await todoApi.deleteTodo(todoId)
+        todos.value = todos.value.filter((todo) => todoId !== todo.id)
+    } catch (error) {
+        errorMessage.value.show('Unable to delete a todo')
+    }
+}
 </script>
 
 <template>
     <div class="todoapp">
-        <h1 class="todoapp__title">todos</h1>
+        <h1 class="todoapp__title">todos {{ todos.length }}</h1>
 
         <div class="todoapp__content">
             <header class="todoapp__header">
+                <!-- this button should have `active` class only if all todos are completed -->
                 <button
-                    type="button"
+                    v-if="todos.length > 0"
                     class="todoapp__toggle-all"
-                    v-if="!activeTodos.length"
-                    :class="{ active: !activeTodos.length }"
+                    :class="{ active: activeTodos.length === 0 }"
                 ></button>
 
                 <form @submit.prevent="addTodo">
-                    <input
-                        data-cy="NewTodoField"
-                        type="text"
-                        class="todoapp__new-todo"
-                        placeholder="What needs to be done?"
-                        @input="errorMessage = ''"
-                    />
+                    <input class="todoapp__new-todo" placeholder="What needs to be done?" v-model="title" />
                 </form>
             </header>
 
-            <section class="todoapp__main" data-cy="TodoList">
-                <div
-                    v-for="(todo, i) of visibleTodos"
+            <TransitionGroup tag="section" name="todolist" class="todoapp__main" v-if="todos.length > 0">
+                <TodoItem
+                    v-for="todo of visibleTodos"
                     :key="todo.id"
-                    class="todo"
-                    :class="{ completed: todo.completed }"
-                >
-                    <label class="todo__status-label">
-                        <input type="checkbox" class="todo__status" v-model="todo.completed" />
-                    </label>
+                    :todo="todo"
+                    @delete="deleteTodo(todo.id)"
+                    @update="updateTodo($event)"
+                />
+            </TransitionGroup>
 
-                    <form v-if="false">
-                        <input class="todo__title-field" placeholder="Empty todo will be deleted" v-model="title" />
-                    </form>
+            <footer class="todoapp__footer" v-if="todos.length > 0">
+                <span class="todo-count">{{ activeTodos.length }} items left</span>
 
-                    <template v-else>
-                        <span class="todo__title">{{ todo.title }}</span>
-                        <button class="todo__remove" @click="todos.splice(i, 1)">×</button>
-                    </template>
+                <StatusFilter v-model="status" />
 
-                    <div class="modal overlay" :class="{ 'is-active': false }">
-                        <div class="modal-background has-background-white-ter"></div>
-                        <div class="loader"></div>
-                    </div>
-                </div>
-            </section>
-
-            <footer class="todoapp__footer">
-                <span class="todo-count"> {{ activeTodos.length }} items left </span>
-
-                <nav class="filter">
-                    <a href="#/" class="filter__link" :class="{ selected: status === 'all' }" @click="status = 'all'">
-                        All
-                    </a>
-                    <a
-                        href="#/active"
-                        class="filter__link"
-                        :class="{ selected: status === 'active' }"
-                        @click="status = 'active'"
-                    >
-                        Active
-                    </a>
-                    <a
-                        href="#/completed"
-                        class="filter__link"
-                        :class="{ selected: status === 'completed' }"
-                        @click="status = 'completed'"
-                    >
-                        Completed
-                    </a>
-                </nav>
-
-                <button
-                    type="button"
-                    class="todoapp__clear-completed"
-                    :disabled="!activeTodos.length"
-                    @click="todos = activeTodos"
-                >
+                <button class="todoapp__clear-completed" :disabled="todos.length === activeTodos.length">
                     Clear completed
                 </button>
             </footer>
         </div>
 
-        <div v-if="errorMessage" class="notification is-danger is-light has-text-weight-normal">
-            <button class="delete" @click="errorMessage = ''"></button>
+        <Message class="is-danger" ref="errorMessage">
+            <template #header>
+                <p>Server Error</p>
+            </template>
 
-            {{ errorMessage }}
-        </div>
+            <template #default="{ text }">
+                <p>{{ text }}</p>
+            </template>
+        </Message>
     </div>
 </template>
+
+<style scoped>
+.todolist-enter-active,
+.todolist-leave-active {
+    max-height: 60px;
+    transition: all 0.5s ease;
+}
+.todolist-enter-from,
+.todolist-leave-to {
+    opacity: 0;
+    max-height: 0;
+    transform: scaleY(0);
+}
+</style>
